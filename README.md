@@ -5,3 +5,4 @@ Aquí se muestra una descripción del contenido del repositorio:
   - AMLvsALL: contiene dos tablas con los genes infra y sobrexpresados del contraste experimental AML vs. ALL.
   - csvsALL: contiene dos tablas con los genes infra y sobrexpresados del contraste experimental de controles sanos vs. ALL.
   - csvsAML: contiene dos tablas con los genes infra y sobrexpresados del contraste experimental de controles sanos vs. AML.
+- genes_seleccionados: archivo PDF que contiene una tabla con los genes seleccionados tras la aplicación del algoritmo de selección de características importantes. Se adjunta el identificador del gen y su valor de importancia media. 
