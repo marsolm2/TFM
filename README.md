@@ -8,5 +8,5 @@ Aquí se muestra una descripción del contenido del repositorio:
 - genes_seleccionados: archivo PDF que contiene una tabla con los genes seleccionados tras la aplicación del algoritmo de selección de características importantes. Se adjunta el identificador del gen y su valor de importancia media. 
 - codigo: una carpeta que incluye el código empleado para generar los resultados del trabajo en HTML y en .ipynb.
   - bag_svm.ipynb: código en .ipynb utilizado para generar el algoritmo bagSVM en Python usando Google Colab como plataforma.
-  - codigo_analisis_expr_diff: código en HTML utilizado para generar los resultados del análisis de expresión diferencial y de la selección de características para el desarrollo de los modelos de aprendizaje automático.
-  - codigo_modelos: código en HTML de la generación de los modelos de aprendizaje automático y de la evaluación de los mismos. 
+  - codigo_analisis_expr_diff: código en HTML (que muestra los resultados de ejecutarlo) y .Rmd utilizado para generar los resultados del análisis de expresión diferencial y de la selección de características para el desarrollo de los modelos de aprendizaje automático.
+  - codigo_modelos: código en HTML (que muestra los resultados de ejecutarlo) y .Rmd de la generación de los modelos de aprendizaje automático y de la evaluación de los mismos. 
