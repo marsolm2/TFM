@@ -1,0 +1,986 @@
+---
+title: "TFM_Maria_Martinez_Solsona"
+author: "María Martínez Solsona"
+date: "2024-11-12"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Información de los paquetes y carga de éstos
+```{r}
+# Paquete para la lectura de archivos TSV.
+library(readr)
+# Paquete para el procesado de los datos. 
+library(dplyr)
+# Paquete para el análisis de expresión diferencial. 
+library(edgeR)
+# Paquete para generar gráficos. 
+library(ggplot2)
+# Paquete para el análisis y la corrección del efecto batch. 
+library(sva)
+# Paquete para funciones específicas del script.
+library(data.table)
+# Paquete para introducir colores en los gráficos. 
+library(wesanderson)
+# Paquete para la instalación de las anotaciones ENTREZ. 
+library(org.Hs.eg.db)
+# Paquete para análisis de ontología.
+library(clusterProfiler)
+library(enrichplot)
+library(DOSE)
+# Paquete para el reescalado de los datos.
+library(scales)
+# Paquete para exportar tablas a xlsx
+library(xlsx)
+# Paquetes para la selección de características importantes. 
+library(Boruta)
+library(randomForest)
+# Paquete para la separación de los dos grupos. 
+library(caret)
+```
+
+# Carga de datos clínicos
+```{r}
+# Cuando se descargan los datos desde GDC, se obtienen 3 archivos:
+
+# sample_sheet, que conecta la información clínica con las muestras.
+# clinical, que contiene la información clínica.
+# y la carpeta con los .tsv que contienen la información de cada paciente. 
+
+# Se han descargado las 3 cohortes de pacientes por separado para que sea más fácil su implementación en el entorno computacional. 
+# Este documento aporta información sobre el ID de la muestra y otras consideraciones. 
+
+sample_sheet_normal <- read_tsv("Normal/sample_sheet_normal.tsv")
+sample_sheet_ALL <- read_tsv("ALL/sample_sheet_ALL.tsv")
+sample_sheet_AML <- read_tsv("AML/sample_sheet_AML.tsv")
+```
+```{r}
+# Información sobre los aspectos clínicos de los pacientes. 
+clinical_normal <- read_tsv("Normal/clinical_normal.tsv")
+clinical_ALL <- read_tsv("ALL/clinical_ALL.tsv")
+clinical_AML <- read_tsv("AML/clinical_AML.tsv")
+```
+
+
+
+# Preprocesado de los datos clínicos
+```{r}
+
+# Cohorte AML
+# Se escogen las columnas del data frame clinical que se van a conservar. 
+clinical_int <- clinical_AML[, c("case_id", "case_submitter_id", "project_id", "age_at_index", "gender", "ajcc_pathologic_stage", "primary_diagnosis", "tissue_or_organ_of_origin")]
+
+# Se eliminan las filas que se encuentran repetidas. Existen filas repetidas porque hay pacientes que tenían información de dos o más tratamientos pero al eliminar esta columna.
+clinical_AML <- clinical_int[!duplicated(clinical_int), ]
+
+# Cohorte ALL
+clinical_int <- clinical_ALL[, c("case_id", "case_submitter_id", "project_id", "age_at_index", "gender", "ajcc_pathologic_stage", "primary_diagnosis", "tissue_or_organ_of_origin")]
+clinical_ALL <- clinical_int[!duplicated(clinical_int), ]
+
+# Cohorte normal
+clinical_int <- clinical_normal[, c("case_id", "case_submitter_id", "project_id", "age_at_index", "gender", "ajcc_pathologic_stage", "primary_diagnosis", "tissue_or_organ_of_origin")]
+clinical_normal <- clinical_int[!duplicated(clinical_int), ]
+
+# Se unen todos los df. 
+clinical_clean <- rbind(clinical_normal, clinical_ALL, clinical_AML)
+
+```
+
+
+# Información de la cohorte de pacientes
+
+```{r}
+# Total 
+# Edad
+# En primer lugar, se convierte a tipo numérico la variable edad del df. 
+clinical_clean$age_at_index <- as.numeric(clinical_clean$age_at_index)
+
+# Número de personas por cada grupo de edad
+# Para extraer esta información, se hace uso de la función subset y se van seleccionando los datos que tienen valores de edad comprendidos entre los rangos establecidos para cada grupo de edad. Luego, se cuentan las filas con la función nrow.
+# Infantes
+nrow(subset(clinical_clean, clinical_clean$age_at_index >= 0 & clinical_clean$age_at_index <= 18))
+# Jóvenes
+nrow(subset(clinical_clean, clinical_clean$age_at_index >= 19 & clinical_clean$age_at_index <= 35))
+# Adultos
+nrow(subset(clinical_clean, clinical_clean$age_at_index >= 36 & clinical_clean$age_at_index <= 59))
+# Ancianos 
+nrow(subset(clinical_clean, clinical_clean$age_at_index >= 60))
+# Desconocido
+sum(is.na(clinical_clean$age_at_index))
+# Género
+# En este caso, se obtiene una tabla que contiene la información de cuántas muestras pertenecen a mujeres, hombres o son de sexo desconocido. 
+table(clinical_clean$gender)
+# Proyecto
+# El mismo protocolo que en el apartado anterior pero para conocer al proyecto al que pertenecen. 
+table(clinical_clean$project_id)
+
+# AML
+clinical_AML$age_at_index <- as.numeric(clinical_AML$age_at_index)
+# Infantes
+nrow(subset(clinical_AML, clinical_AML$age_at_index >= 0 & clinical_AML$age_at_index <= 18))
+# Jóvenes
+nrow(subset(clinical_AML, clinical_AML$age_at_index >= 19 & clinical_AML$age_at_index <= 35))
+# Adultos
+nrow(subset(clinical_AML, clinical_AML$age_at_index >= 36 & clinical_AML$age_at_index <= 59))
+# Ancianos 
+nrow(subset(clinical_AML, clinical_AML$age_at_index >= 60))
+# Desconocido
+sum(is.na(clinical_AML$age_at_index))
+# Género
+table(clinical_AML$gender)
+# Proyecto
+table(clinical_AML$project_id)
+
+# ALL
+clinical_ALL$age_at_index <- as.numeric(clinical_ALL$age_at_index)
+# Número de personas por cada grupo de edad
+# Infantes
+nrow(subset(clinical_ALL, clinical_ALL$age_at_index >= 0 & clinical_ALL$age_at_index <= 18))
+# Jóvenes
+nrow(subset(clinical_ALL, clinical_ALL$age_at_index >= 19 & clinical_ALL$age_at_index <= 35))
+# Adultos
+nrow(subset(clinical_ALL, clinical_ALL$age_at_index >= 36 & clinical_ALL$age_at_index <= 59))
+# Ancianos 
+nrow(subset(clinical_ALL, clinical_ALL$age_at_index >= 60))
+# Desconocido
+sum(is.na(clinical_ALL$age_at_index))
+# Género
+table(clinical_ALL$gender)
+# Proyecto
+table(clinical_ALL$project_id)
+
+# Normal
+clinical_normal$age_at_index <- as.numeric(clinical_normal$age_at_index)
+# Número de personas por cada grupo de edad
+# Infantes
+nrow(subset(clinical_normal, clinical_normal$age_at_index >= 0 & clinical_normal$age_at_index <= 18))
+# Jóvenes
+nrow(subset(clinical_normal, clinical_normal$age_at_index >= 19 & clinical_normal$age_at_index <= 35))
+# Adultos
+nrow(subset(clinical_normal, clinical_normal$age_at_index >= 36 & clinical_normal$age_at_index <= 59))
+# Ancianos 
+nrow(subset(clinical_normal, clinical_normal$age_at_index >= 60))
+# Desconocido
+sum(is.na(clinical_normal$age_at_index))
+# Género
+table(clinical_normal$gender)
+# Proyecto
+table(clinical_normal$project_id)
+
+table(clinical_clean$gender)
+```
+
+# Creación de las matrices de expresión
+
+## LMA
+
+```{r}
+# El script para leer las carpetas independientes que contienen los archivos TSV y juntar todos estos archivos TSV en un único data frame se ha obtenido de la siguiente entrada del foro stackoverflow https://stackoverflow.com/questions/75635051/merging-large-tcga-tsv-files-in-a-memory-efficient-way-on-posit-cloud-formerly 
+
+# Se cambia en targ_cols el nombre de las columnas para que éstas se etiqueten así. 
+
+# Se obtiene un vector que contiene la información con los nombres de los archivos.
+files <- list.files("AML/AML", pattern="*.tsv", full.names = T, recursive = T)
+
+# Se cambia en targ_cols el nombre de las columnas para que éstas se etiqueten así ya que estos nombres corresponderán a las columnas reales conservadas.
+targ_cols <- c("gene_id", "gene_name", "gene_type","unstranded")
+
+# Se lee cada uno de los archivos conservando las filas que interesan. Se saltan las primeras seis filas del archivo porque contienen información sobre ese paciente que no tiene interés en este caso. Las columnas 1, 2, 3 y 4 corresponden a las citadas en tag_cols según la estructura común de los .tsv.
+result <- lapply(files, \(f) fread(f,header=F, skip=6, select = c(1,2,3,4),col.names = targ_cols))
+
+# Se establecen los nombres de las muestras como los nombres de los archivos. 
+result <- setNames(result, basename(files))
+```
+
+```{r}
+# Se juntan todos los archivos en un mismo archivo grande. 
+result <- rbindlist(result, idcol  = "file_name")
+
+# Se usa el manifesto para generar la metaMatrix ya que contiene los nombres de los archivos. Esto servirá para dar el formato final al data frame que se empleará para ordenar todas las listas que se generaron anteriormente con los datos. 
+matrix_1 <- read_tsv("AML/gdc_manifest.2024-10-20.txt")
+metaMatrix <- structure(list(file_name = matrix_1$filename, caseid = matrix_1$id), class = "data.frame", row.names = c(NA, -10L))
+
+# se junta la metaMatrix con el resultado y se elimina el file_name. 
+result <- result[metaMatrix, on="file_name"][,file_name:=NULL]
+
+# Se amplia el resultado usando dcast
+result <- dcast(result, gene_id+gene_name+gene_type~caseid, value.var = "unstranded")
+```
+```{r}
+# Se recupera el resultado obtenido en la variable result en un data frame independiente y se repite el proceso para los otros conjuntos de datos. 
+AML_expressionset <- result
+```
+
+
+## LLA
+
+```{r}
+files <- list.files("ALL/ALL", pattern="*.tsv", full.names = T, recursive = T)
+targ_cols <- c("gene_id", "gene_name", "gene_type","unstranded")
+result <- lapply(files, \(f) fread(f,header=F, skip=6, select = c(1,2,3,4),col.names = targ_cols))
+result <- setNames(result, basename(files))
+```
+
+```{r}
+result <- rbindlist(result, idcol  = "file_name")
+matrix_1 <- read_tsv("ALL/gdc_manifest.2024-10-20 (1).txt")
+metaMatrix <- structure(list(file_name = matrix_1$filename, caseid = matrix_1$id), class = "data.frame", row.names = c(NA, -10L))
+result <- result[metaMatrix, on="file_name"][,file_name:=NULL]
+result <- dcast(result, gene_id+gene_name+gene_type~caseid, value.var = "unstranded")
+```
+```{r}
+ALL_expressionset <- result
+```
+
+## Normal
+
+```{r}
+files <- list.files("Normal/normal", pattern="*.tsv", full.names = T, recursive = T)
+targ_cols <- c("gene_id", "gene_name", "gene_type","unstranded")
+result <- lapply(files, \(f) fread(f,header=F, skip=6, select = c(1,2,3,4),col.names = targ_cols))
+result <- setNames(result, basename(files))
+```
+
+```{r}
+result <- rbindlist(result, idcol  = "file_name")
+matrix_1 <- read_tsv("normal/gdc_manifest.2024-10-20 (2).txt")
+metaMatrix <- structure(list(file_name = matrix_1$filename, caseid = matrix_1$id), class = "data.frame", row.names = c(NA, -10L))
+result <- result[metaMatrix, on="file_name"][,file_name:=NULL]
+result <- dcast(result, gene_id+gene_name+gene_type~caseid, value.var = "unstranded")
+```
+```{r}
+normal_expressionset <- result
+```
+
+## Partición de los datos
+
+```{r}
+set.seed(21081999)
+# Dado que se quiere generar un modelo que no esté sesgado, el primer paso es dividir los datos en dos conjuntos: entrenamiento y prueba. El conjunto de datos de entrenamiento se empleará para crear el análisis de expresión diferencial mientras que el de prueba se reservará para ser solamente ser utilizado en la evaluación de los modelos que se generarán. 
+
+# DATA FRAME CONTROLES
+# Se ajustan los data frames para los distintos datos.
+
+# En primer lugar, se traspone el conjunto de datos anteriormente obtenido. Se tiene que trasponer para que las muestras se queden en las filas y los genes representen las columnas (características). Este formato es el adecuado para hacer la partición de los datos ya que es como opera el paquete caret.
+partition_normal <- as.data.frame(t(normal_expressionset[,-c(1:3)]))
+
+# Se asignan los nombres de las columnas (nombres de los genes) como los identificadores ENSEMBL de éstos. 
+colnames(partition_normal) <- normal_expressionset$gene_id
+
+# Se crea una columna llamada "clase" que contenga la palabra "normal", denotando la pertenencia a esa clase de las distintas muestras. 
+partition_normal$clase <- rep("normal", 52)
+
+# Se repite el mismo proceso en los otros dos data frames. 
+# DATA FRAME ALL
+partition_ALL <- as.data.frame(t(ALL_expressionset[,-c(1:3)]))
+colnames(partition_ALL) <- ALL_expressionset$gene_id
+partition_ALL$clase <- rep("ALL", 108)
+
+# DATA FRAME AML
+partition_AML <- as.data.frame(t(AML_expressionset[,-c(1:3)]))
+colnames(partition_AML) <- AML_expressionset$gene_id
+partition_AML$clase <- rep("AML", 501)
+
+# Se genera una partición de los datos (70% para el análisis de expresión diferencial y la construcción de los modelos de aprendizaje automático y el 30% para evaluar el modelo en pasos posteriores). 
+
+# En primer lugar, se unen los distintos data frames en uno único para que la partición que se genere esté controlada para proporcionar una proporción similar de las clases a los dos conjuntos de datos que se van a generar. El orden es: NORMAL, ALL, AML. 
+partition <- rbind(partition_normal, partition_ALL, partition_AML)
+
+# Seguidamente se obtiene el índice de los datos que formarán parte del conjunto de datos de training. En el valor p se determina 0.7 porque se quiere un 70% de datos en el conjunto de entrenamiento. 
+trainIndex <- createDataPartition(partition$clase, p=0.70)$Resample1
+
+# Ahora se generan los dos data frames, usando como referencia el train. 
+train <- partition[trainIndex, ]
+test <- partition[-trainIndex, ]
+
+# Y se comprueba que, efectivamente, la composición es la adecuada. 
+
+# Clases originales.
+table(partition$clase)
+
+# Train 
+dim(train)
+table(train$clase)
+
+# Test
+dim(test)
+table(test$clase)
+
+# Finalmente, se generan dos conjuntos de train: uno que almacene solamente los conteos y un vector que almacene las clases. Esto será útil para pasos posteriores. 
+train_y <- as.factor(train$clase)
+train_x <- train[, -ncol(train)]
+```
+
+
+# Creación del objeto dgeList
+
+```{r}
+# Se almacena la información de todos los conteos de los genes en la variable count. Esta variable espera que los genes se encuentren situados en las filas y que las muestras sean las columnas, por lo que se aplica la trasposición sobre el conjunto de datos de entrenamiento (en esencia, es devolver a los datos su formato original). 
+counts <- t(train_x)
+
+## Se almacenan las anotaciones de los genes en la variable genes. Como todos los df comparten el mismo tamaño y orden de las lecturas, se pueden seleccionar únicamente las de normal para hacerlo. 
+genes <- select(normal_expressionset, gene_id, gene_name, gene_type)
+
+# Se usa el vector de train_y para asignar los nombres de los grupos. El orden se ha preservado: NORMAL, ALL Y AML
+group <- train_y
+
+# Finalmente, se crea el objeto DGEList con toda esta información. 
+DGEList <- DGEList(counts = counts, group = group, genes = genes)
+
+```
+
+# Filtrado de los genes 
+
+```{r}
+# Dado que el filtrado se desea hacer para cada clase en particular, es necesario en primera instancia separar los datos de las tres clases. Para ello, se almacenan los datos de conteo de las tres clases en tres data frames diferentes. 
+
+# Para conseguir este objetivo, se usa la función subset y se buscan aquellos datos que correspondan con la clase seleccionada. 
+count_normal <- as.data.frame(t(subset(train, train$clase == "normal")))
+count_ALL <- as.data.frame(t(subset(train, train$clase == "ALL")))
+count_AML <- as.data.frame(t(subset(train, train$clase == "AML")))
+
+# Finalmente, se convierten a numérico estos datos ya que al reformatearlos como df se han tornado variables de tipo chr. 
+count_normal <- as.data.frame(lapply(count_normal, as.numeric))
+count_ALL <- as.data.frame(lapply(count_ALL, as.numeric))
+count_AML <- as.data.frame(lapply(count_AML, as.numeric))
+```
+
+
+```{r}
+# Se crea un objeto DGEList para cada condición que servirá para el filtrado de genes. Para ello, se emplean los df generados anteriormente eliminándoles la última fila, que es la que indicaba la clase a la que pertenecían las muestras. Se asignan los nombres de los genes empleando la matriz de expresión original, porque este número y orden no ha cambiado. 
+DGE_normal <- DGEList(counts = count_normal[-60661,], group = rep("normal", 37), genes = normal_expressionset$gene_id)
+DGE_AML <- DGEList(counts = count_AML[-60661,], group = rep("AML", 351), genes = AML_expressionset$gene_id)
+DGE_ALL <- DGEList(counts = count_ALL[-60661,], group = rep("ALL", 76), genes = ALL_expressionset$gene_id)
+```
+
+```{r}
+# Media de las librerías. Se ha extraido la media de las librerías para determinar el valor de CPM que mejor podía funcionar. 
+mean(colSums(DGE_ALL$counts))
+
+# ALL
+# Se convervan aquellos genes que tengan un cpm medio mayor que 0.25 en cada uno de los grupos. 
+# En keep se almacenan aquellos rowMeans que correspondan a genes con un CPM mayor o igual a 0.25.
+keep <- rowMeans(cpm(DGE_ALL$counts)) >= 0.25
+# Estos son los que se conservan en los objetos DGE de cada clase filtrados.
+DGEList_filtered_ALL <- DGEList[keep, , keep.lib.sizes = FALSE]
+# Se muestran las dimensiones para ver cuántos genes se han conservado. 
+dim(DGEList_filtered_ALL)
+
+# AML
+keep <- rowMeans(cpm(DGE_AML$counts)) >= 0.25
+DGEList_filtered_AML <- DGEList[keep, , keep.lib.sizes = FALSE]
+dim(DGEList_filtered_AML)
+
+# NORMAL
+keep <- rowMeans(cpm(DGE_normal$counts)) >= 0.25
+DGEList_filtered_normal <- DGEList[keep, , keep.lib.sizes = FALSE]
+dim(DGEList_filtered_normal)
+```
+
+```{r}
+# Ahora se creó una lista que reuniese todos los genes seleccionados para las tres caracteristicas. La idea era conservar todos los genes que estuviesen por lo menos una vez representados en alguna de las clases. De esta manera, haciedo uso de la función unique se conservaron estos nombres de genes pero no repetidos. 
+genes_filtrados <-unique(c(rownames(DGEList_filtered_ALL$genes), rownames(DGEList_filtered_AML$genes), rownames(DGEList_filtered_normal$genes)))
+```
+
+```{r}
+# Estos genes, a su vez, se filtraron del objeto original DGEList que contenía todas las muestras. 
+genes_presentes <- rownames(DGEList) %in% genes_filtrados
+# Y se recalcularon los tamaños de las librerías.
+DGEList_filtered <- DGEList[genes_presentes, ,keep.lib.sizes = FALSE]
+```
+
+```{r}
+# Se muestra un gráfico de barras que representa el número de transcritos antes y después del filtrado. 
+filtered <- data.frame("Tipo" = c("Antes del filtrado", "Después del filtrado"), "Valores" = c(as.numeric(nrow(DGEList$counts)), as.numeric(nrow(DGEList_filtered$counts)))) 
+
+# Se genera el gráfico usando ggplot2. 
+filtered_figure <- ggplot(data = filtered, aes(x=Tipo, y = Valores, fill = Tipo)) + 
+  geom_bar(stat = "identity") + geom_text(aes(label=Valores), vjust=-0.3, color = "black", size = 4.7) + 
+  scale_fill_manual(values=wes_palette(n=4, name="Moonrise2")) + 
+  labs(x = "", y = "Número de transcritos") + 
+  theme_classic() +
+  theme(legend.position = "none", plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm"), axis.title.y = element_text(size = 16), axis.text.x = element_text(size = 14), axis.text.y = element_text(size = 14))
+
+filtered_figure
+# http://www.sthda.com/english/wiki/ggplot2-barplots-quick-start-guide-r-software-and-data-visualization y http://www.sthda.com/english/wiki/ggplot2-colors-how-to-change-colors-automatically-and-manually 
+```
+# Estudio y corrección del efecto batch
+
+```{r}
+# En primer lugar, habría que extraer el vector que relacione a qué estudio pertenece cada muestra por su ID. Para ello, se utiliza la función match que buscará el nombre de las filas del conjunto de datos de train para cada clase que correspondan con la columna File ID del df de sample_sheet y extraerá de estas el valor de Project ID (que es el proyecto al que pertenecen). En este caso, las filas eran las muestras porque todavía no estaba traspuesto. 
+
+batch_normal <- sample_sheet_normal$`Project ID`[match(rownames(subset(train, train$clase == "normal")), sample_sheet_normal$`File ID`)]
+batch_AML <- sample_sheet_AML$`Project ID`[match(rownames(subset(train, train$clase == "AML")), sample_sheet_AML$`File ID`)]
+batch_ALL <- sample_sheet_ALL$`Project ID`[match(rownames(subset(train, train$clase == "ALL")), sample_sheet_ALL$`File ID`)]
+
+# Se ha decidido estudiar el efecto batch en cada grupo en particular porque existen un número diferente de muestras que pertenecen a cada batch y hay batch específicos de cada grupo por lo que se espera que el análisis funcione mejor así. 
+```
+
+```{r}
+# Se genera un vector que contenga las relaciones entre los distintos colores y grupos. 
+colores_asignados <- c("BEATAML1.0-COHORT" = "#E6A5B8", "MP2PRT-ALL" = "#A5B8E6", "TARGET-ALL-P1" = "#F0D1A1", "TARGET-ALL-P2" = "#E6DCCB", "TARGET-ALL-P3" = "#A8C3A0", "TARGET-AML" = "#B0C5C9", "TCGA-LAML" = "#C7B8E6")
+```
+
+```{r}
+# Se extraen los colores para cada muestra/grupo.
+colores_grupo_normal <- colores_asignados[batch_normal]
+colores_grupo_AML <- colores_asignados[batch_AML]
+colores_grupo_ALL <- colores_asignados[batch_ALL]
+batch <- c(batch_normal, batch_ALL, batch_AML)
+colores_batch <- colores_asignados[batch]
+```
+
+```{r}
+# Se extraen los conteos ahora filtrados y se corrobora que son los que tocan para cada grupo.
+# Al haber ordenado las muestras, se sabe que las primeras pertenecen al grupo de muestras normales, las segundas al grupo de muestras de ALL y las terceras al grupo de muestras de AML. Se fintran usando los índices de posición (filas). 
+normal_counts <- as.data.frame(DGEList_filtered$counts[,c(1:37)])
+# Para comprobar que la selección es correcta, se comparan los nombres de las columnas del nuevo data frame (que corresponde con el nombre de las muestras) con el nombre de las filas de train, el df original, para ver si corresponden. Si es así, es que la selección ha sido correcta. 
+identical(rownames(subset(train, train$clase == "normal")), colnames(normal_counts))
+
+AML_counts <- as.data.frame(DGEList_filtered$counts[,c(114:464)])
+identical(rownames(subset(train, train$clase == "AML")), colnames(AML_counts))
+
+ALL_counts <- as.data.frame(DGEList_filtered$counts[,c(38:113)])
+identical(rownames(subset(train, train$clase == "ALL")), colnames(ALL_counts))
+```
+
+
+```{r}
+# Se procede a estudiar el efecto batch haciendo uso de PCA. 
+
+# PCA antes de aplicar la corrección.
+# PCA normal. 
+# Se ajusta el tamaño del gráfico.
+par(mar= c(5,5,4,10))
+# En primer lugar, se genera el PCA usando la traspuesta de la matriz que se genera con los valores de los conteos de expresión del grupo en cuestión. Se deben trasponer los datos ya que las muestras deben ocupar las filas y los genes las columnas. 
+pca<-prcomp(t(normal_counts))
+# Se extrae el porcentaje de variabilidad que explican los distintos componentes del PCA. 
+loads<-round(pca$sdev^2/sum(pca$sdev^2)*100,1)
+# Se indican los nombres del eje X e Y y los valores que tienen que tomar (componente 1 y 2 y el porcentaje de variabilidad que explican). 
+xlab<-c(paste("PC1",loads[1],"%"))
+ylab<-c(paste("PC2",loads[2],"%"))
+# Se genera el gráfico de PCA con los valores de diseño establecidos. 
+plot(pca$x[,1:2],xlab=xlab,ylab=ylab,pch=21,bg=colores_grupo_normal,col=colores_grupo_normal, main="PCA grupo sano pre-corrección") 
+legend("topright",inset= c(-0.45,0),legend= c("TARGET-AML","BEATAML1.0"),fill= c("#B0C5C9","#E6A5B8"),border="black",xpd=TRUE)
+
+```
+```{r}
+# PCA AML
+par(mar= c(5,5,4,10))
+pca<-prcomp(t(AML_counts))
+loads<-round(pca$sdev^2/sum(pca$sdev^2)*100,1)
+xlab<-c(paste("PC1",loads[1],"%"))
+ylab<-c(paste("PC2",loads[2],"%"))
+plot(pca$x[,1:2],xlab=xlab,ylab=ylab,pch=21,bg=colores_grupo_AML,col=colores_grupo_AML, main="PCA grupo con LMA pre-corrección") 
+legend("topright",inset= c(-0.45,0),legend= c("TARGET-AML","TCGA-LAML"),fill= c("#B0C5C9","#C7B8E6"),border="black",xpd=TRUE)
+```
+
+
+```{r}
+# PCA ALL
+par(mar= c(5,5,4,10))
+pca<-prcomp(t(ALL_counts))
+loads<-round(pca$sdev^2/sum(pca$sdev^2)*100,1)
+xlab<-c(paste("PC1",loads[1],"%"))
+ylab<-c(paste("PC2",loads[2],"%"))
+plot(pca$x[,1:2],xlab=xlab,ylab=ylab,pch=21,bg=colores_grupo_ALL,col=colores_grupo_ALL, main="PCA grupo con LLA pre-corrección") 
+legend("topright",inset= c(-0.45,0),legend= c("MP2PRT-ALL","TARGET-ALL-P1", "TARGET-ALL-P2", "TARGET-ALL-P3"),fill= c("#A5B8E6","#F0D1A1", "#E6DCCB", "#A8C3A0"),border="black",xpd=TRUE)
+```
+```{r}
+# Corrección del efecto batch haciendo uso del software combat-seq del grupo normal
+normal_counts_adj <- ComBat_seq(as.matrix(normal_counts), batch = batch_normal)
+```
+
+```{r}
+# PCA normal. 
+par(mar= c(5,5,4,10))
+pca<-prcomp(t(normal_counts_adj))
+loads<-round(pca$sdev^2/sum(pca$sdev^2)*100,1)
+xlab<-c(paste("PC1",loads[1],"%"))
+ylab<-c(paste("PC2",loads[2],"%"))
+plot(pca$x[,1:2],xlab=xlab,ylab=ylab,pch=21,bg=colores_grupo_normal,col=colores_grupo_normal, main="PCA grupo sano post-corrección") 
+legend("topright",inset= c(-0.45,0),legend= c("TARGET-AML","BEATAML1.0"),fill= c("#B0C5C9","#E6A5B8"),border="black",xpd=TRUE)
+```
+
+
+
+```{r}
+# Corrección del efecto batch haciendo uso del software combat-seq en AML
+AML_counts_adj <- ComBat_seq(as.matrix(AML_counts), batch = batch_AML)
+```
+```{r}
+# PCA AML
+par(mar= c(5,5,4,10))
+pca<-prcomp(t(AML_counts_adj))
+loads<-round(pca$sdev^2/sum(pca$sdev^2)*100,1)
+xlab<-c(paste("PC1",loads[1],"%"))
+ylab<-c(paste("PC2",loads[2],"%"))
+plot(pca$x[,1:2],xlab=xlab,ylab=ylab,pch=21,bg=colores_grupo_AML,col=colores_grupo_AML, main="PCA grupo con LMA post-corrección") 
+legend("topright",inset= c(-0.45,0),legend= c("TARGET-AML","TCGA-LAML"),fill= c("#B0C5C9","#C7B8E6"),border="black",xpd=TRUE)
+```
+
+
+```{r}
+# Corrección del efecto batch haciendo uso del software combat-seq en ALL
+ALL_counts_adj <- ComBat_seq(as.matrix(ALL_counts), batch = batch_ALL)
+```
+
+```{r}
+# PCA ALL
+par(mar= c(5,5,4,10))
+pca<-prcomp(t(ALL_counts_adj))
+loads<-round(pca$sdev^2/sum(pca$sdev^2)*100,1)
+xlab<-c(paste("PC1",loads[1],"%"))
+ylab<-c(paste("PC2",loads[2],"%"))
+plot(pca$x[,1:2],xlab=xlab,ylab=ylab,pch=21,bg=colores_grupo_ALL,col=colores_grupo_ALL, main="PCA grupo con LLA pre-corrección") 
+legend("topright",inset= c(-0.45,0),legend= c("MP2PRT-ALL","TARGET-ALL-P1", "TARGET-ALL-P2", "TARGET-ALL-P3"),fill= c("#A5B8E6","#F0D1A1", "#E6DCCB", "#A8C3A0"),border="black",xpd=TRUE)
+```
+
+# Creación del nuevo objeto DGEList
+```{r}
+# Se juntan los data frames obtenidos ajustados y se crea el objeto DGEList, teniendo en cuenta el orden que se había establecido anteriormente para respetar el vector de grupos: NORMAL, ALL y AML. 
+# Se unen los data frames y se construye el objeto DGEList.
+counts_adj <- cbind(normal_counts_adj, ALL_counts_adj, AML_counts_adj)
+DGEList_adj <- DGEList(counts = counts_adj, group = train_y, genes = DGEList_filtered$genes)
+
+# Adicionalmente, se genera la matriz de diseño, en la que se introduce group del objeto DGEList para que cree las particiones de los datos posibles. Se añade el 0 por delante para que no genere intercepto y los contrastes sean más interpretables.  
+design <- model.matrix(~0+group)
+```
+
+
+# Comprobación del tamaño de las librerías
+
+```{r}
+# Se genera un gráfico de barras con el tamaño de las librerías. 
+barplot(DGEList_adj$samples$lib.size*1e-6, names=1:464, ylab="Tamaño de las librerías (millones)")
+```
+
+# Normalización TMM
+
+```{r}
+# Visto que se observa una alta diversidad de tamaños de librerías, decidimos llevar a cabo una normalización TMM. 
+DGEList_adj <- normLibSizes(DGEList_adj)
+```
+
+# Preanálisis usando MDS
+
+```{r}
+# Se asignan formas diferentes a los puntos que representan las muestras según al lote (proyecto) al que pertenecen.
+formas_asignadas <- c("BEATAML1.0-COHORT" = 16, "MP2PRT-ALL" = 17, "TARGET-ALL-P1" = 18, "TARGET-ALL-P2" = 15, "TARGET-ALL-P3" = 1, "TARGET-AML" = 2, "TCGA-LAML" = 3)
+# Se extrae el vector de formas para cada punto
+formas_asignadas_batch <- formas_asignadas[batch]
+```
+
+```{r}
+# También se extrae la información de cuántas muestras hay en cada lote, para mencionarlo en el subtexto de la figura en el trabajo. 
+table(batch)
+```
+
+
+```{r}
+# Se genera el gráfico MDS usando la función plotMDS. Para generarlo, se han añadido los colores de los puntos en el orden en el que se encuentran en el objeto DGEList. Adicionalmente, se ha determinado también formas diferentes de los puntos para los distintos lotes, para comprobar que las muestras no se agrupan siguiendo un patrón relacionado con el lote. 
+plotMDS(DGEList_adj, col = c(rep("#E35B8F", 37), rep("#5B8FE3", 76), rep("#A3B18A", 351)), pch = formas_asignadas_batch)
+```
+
+# Estimación de la dispersión
+```{r}
+# Se estima la dispersión y se asigna esta al modelo que se está generando.
+DGEList_adj <- estimateDisp(DGEList_adj, design, robust = TRUE)
+
+# Se muestra la dispersión común para anotarla en el gráfico posteriormete.
+DGEList_adj$common.dispersion
+
+# Se muestra el gráfico de la estimación de la dispersión. 
+plotBCV(DGEList_adj)
+```
+
+# Análisis de expresión diferencial
+
+```{r}
+# Primero, se genera el ajuste del modelo empleando la fució glmQLFit. Se añade la opción robust para generar un mejor análisis (explicado en la memoria). Este ajuste recalculará las dispersiones utilizand una aproximación QL.
+ajuste <- glmQLFit(DGEList_adj, design, robust = TRUE)
+```
+
+
+```{r}
+# Se extraen los nombres de la matriz de diseño del experimento para generar los contrastes entre las muestras. 
+colnames(design)
+```
+
+```{r}
+# Los contrastes se hacen enfrentando el grupo que se quiere considerar como sobre o infraexpresado respecto a la muestra en cuestión. En este caso, se colocará el grupo del cáncer primero para compararlo sobre la muestra control (los genes estarán infra o sobrexpresados RESPECTO al control). Los niveles corresponden a los niveles definidos para la matriz de diseño. 
+
+con_1 <- makeContrasts(normalvsALL = groupALL-groupnormal, levels = design)
+con_2 <- makeContrasts(normalvsAML = groupAML - groupnormal, levels = design)
+con_3 <- makeContrasts(AMLvsALL = groupAML - groupALL, levels = design)
+```
+
+
+
+```{r}
+# Se usa TREAT porque se quiere definir un umbral para el log2foldchange. 
+lrt.ALLvsAML <- glmTreat(ajuste, contrast = con_3, lfc=2)
+topTags(lrt.ALLvsAML)
+```
+
+```{r}
+lrt.normalvsALL <- glmTreat(ajuste, contrast = con_1, lfc=2)
+topTags(lrt.normalvsALL)
+```
+```{r}
+lrt.normalvsAML <- glmTreat(ajuste, contrast = con_2, lfc=2)
+topTags(lrt.normalvsAML)
+```
+
+# Anotaciones
+
+```{r}
+# Antes de proceder al análisis de los resultados obtenidos, se han modificado las anotaciones de los genes para poder trabajar con ellas. 
+
+# Se almacena la información del listado de genes en una variable llamada symbols. 
+symbols <- lrt.ALLvsAML$genes$gene_id
+
+# Se utilikza la función strsplit para eliminar los valores tras el punto en los identificadores de ensembl (estos identificadores corresponden a la versión del gen y no funcionan cuando se quieren usar estos identificadores para los estudios de ontología). Se emplea la función strsplit.
+
+# Fuentes de consulta: https://r-coder.com/strsplit-en-r/ y https://www.rdocumentation.org/packages/base/versions/3.6.2/topics/strsplit
+
+symbols <- lrt.ALLvsAML$genes$gene_id
+# Se crea un vector que almacenará esta información
+symbols_new <- c()
+# Se crea un bulce for que irá aplicando la función a cada valor del vector original
+for (i in symbols) {
+  new <- strsplit(i, split = "\\.")[[1]][1]
+  symbols_new <- c(symbols_new, new)
+}
+
+# Se añaden estos símbolos a una nueva columna de los data frames generados con anterioridad para los genes. 
+lrt.normalvsAML$genes$ENSEBLnew <- symbols_new
+lrt.normalvsALL$genes$ENSEBLnew <- symbols_new
+lrt.ALLvsAML$genes$ENSEBLnew <- symbols_new
+```
+
+# Selección de genes diferencialmente expresados
+
+```{r}
+# La selección, considerando que el threshold del logFC = 2 ya se aplicó en el paso anterior y que los genes no serán significativos si no se ha superado este valor, se aplica usando un umbral de p-valor = <0.05. Se seleccioan esos genes de la tabla. Se juntan los identificadores de los genes con la tabla generada para los valores de los genes obtenidos y, con este nuevo data frame generado, se añade una fila que asigne el valor TRUE o FALSE cuando se supere el p-valor indicado. De esta manera, se seleccionan los genes diferencialmetne expresados. 
+significant_normalvsAML <- cbind(lrt.normalvsAML$table, lrt.normalvsAML$genes)
+significant_normalvsAML$significant <- as.factor(significant_normalvsAML$PValue < 0.05)
+
+significant_normalvsALL <- cbind(lrt.normalvsALL$table, lrt.normalvsALL$genes)
+significant_normalvsALL$significant <- as.factor(significant_normalvsALL$PValue < 0.05)
+
+significant_ALLvsAML <- cbind(lrt.ALLvsAML$table, lrt.ALLvsAML$genes)
+significant_ALLvsAML$significant <- as.factor(significant_ALLvsAML$PValue < 0.05)
+
+# Ahora se extrae el número de genes infra y sobrexpresados para cada condición particular. 
+# Normal vs. ALL
+# Número de genes diferencialmente expresados
+table(significant_normalvsALL$significant)
+# Número de genes diferencialmente expresados sobre e infraexpresados
+nrow(subset(significant_normalvsALL, significant_normalvsALL$significant == TRUE & significant_normalvsALL$logFC > 0))
+nrow(subset(significant_normalvsALL, significant_normalvsALL$significant == TRUE & significant_normalvsALL$logFC < 0))
+
+# Normal vs. AML
+# Número de genes diferencialmente expresados
+table(significant_normalvsAML$significant)
+# Número de genes diferencialmente expresados sobre e infraexpresados
+nrow(subset(significant_normalvsAML, significant_normalvsAML$significant == TRUE & significant_normalvsAML$logFC > 0))
+nrow(subset(significant_normalvsAML, significant_normalvsAML$significant == TRUE & significant_normalvsAML$logFC < 0))
+
+# ALL vs. AML
+# Número de genes diferencialmente expresados
+table(significant_ALLvsAML$significant)
+# Número de genes diferencialmente expresados sobre e infraexpresados
+nrow(subset(significant_ALLvsAML, significant_ALLvsAML$significant == TRUE & significant_ALLvsAML$logFC > 0))
+nrow(subset(significant_ALLvsAML, significant_ALLvsAML$significant == TRUE & significant_ALLvsAML$logFC < 0))
+```
+
+```{r}
+# Ahora se van a exportar las tablas de genes diferencialmente expresados a un archivo excel para de esta manera incorprarlo en el trabajo final.
+# Normal vs. ALL
+# Se genera un data frame que solamente almacene los valores significativos.
+significant <- subset(significant_normalvsALL, significant_normalvsALL$significant == TRUE)
+# Se genera un data frame que almacene las columnas que se quieren para exportar. 
+export <- data.frame("Identificador" = significant$gene_id, "Nombre del gen" = significant$gene_name, "logFC" = significant$logFC, "p-valor" = significant$PValue)
+# Se ordenan los valores dependiendo del logFC
+export <- export[order(-export$logFC),]
+# Se exportan los resultados finales. 
+write.xlsx(export, "normalvsALL.xlsx")
+
+# Normal vs AML
+significant <- subset(significant_normalvsAML, significant_normalvsAML$significant == TRUE)
+export <- data.frame("Identificador" = significant$gene_id, "Nombre del gen" = significant$gene_name, "logFC" = significant$logFC, "p-valor" = significant$PValue)
+export <- export[order(-export$logFC),]
+write.xlsx(export, "normalvsAML.xlsx")
+
+# ALL vs. AML
+significant <- subset(significant_ALLvsAML, significant_ALLvsAML$significant == TRUE)
+export <- data.frame("Identificador" = significant$gene_id, "Nombre del gen" = significant$gene_name, "logFC" = significant$logFC, "p-valor" = significant$PValue)
+export <- export[order(-export$logFC),]
+write.xlsx(export, "ALLvsAML.xlsx")
+```
+
+
+## Vulcano plots
+
+```{r}
+# Selección top10 genes más infra y sobrexpresados. 
+# Usando como plantilla el logFC, se ordenan los genes y se seleccionan los cinco más sobrexpresados y los cinco más infraexpresados. Estos serán los que se etiquetarán en los vulcano plots. 
+top_positivos_AMLvsALL <- significant_ALLvsAML[order(-significant_ALLvsAML$logFC), ][1:5,]
+top_negativos_AMLvsALL <- significant_ALLvsAML[order(significant_ALLvsAML$logFC), ][1:5,]
+top_gen_AMLvsALL <- rbind(top_negativos_AMLvsALL, top_positivos_AMLvsALL)
+
+top_gen_AMLvsALL
+
+top_positivos_normalvsALL <- significant_normalvsALL[order(-significant_normalvsALL$logFC), ][1:5,]
+top_negativos_normalvsALL <- significant_normalvsALL[order(significant_normalvsALL$logFC), ][1:5,]
+top_gen_normalvsALL <- rbind(top_negativos_normalvsALL, top_positivos_normalvsALL)
+
+top_gen_normalvsALL
+
+top_positivos_normalvsAML <- significant_normalvsAML[order(-significant_normalvsAML$logFC), ][1:5,]
+top_negativos_normalvsAML <- significant_normalvsAML[order(significant_normalvsAML$logFC), ][1:5,]
+top_gen_normalvsAML <- rbind(top_negativos_normalvsAML, top_positivos_normalvsAML)
+
+top_gen_normalvsAML
+```
+
+
+```{r}
+library(ggrepel)
+# Se genera el vulcano plot. 
+normalvsAML_ggplot <- ggplot(data = significant_normalvsAML, aes(x = logFC, y = -log10(PValue), color = significant)) + geom_point() + geom_vline(xintercept=c(-2, 2), col="black") +
+    geom_hline(yintercept=-log10(0.05), col="black") + theme_bw() + scale_color_manual(values = c("black", "#104E8B")) + labs(title = "Vulcano plot Sanos vs. LMA", x = "Log2FC", y = "-log10(P-valor)")+ theme(legend.position = "none") + geom_text_repel(data = top_gen_normalvsAML, aes(label = gene_name), size = 4, color = "black", max.overlaps = 10)
+normalvsAML_ggplot
+
+```
+
+```{r}
+normalvsALL_ggplot <- ggplot(data = significant_normalvsALL, aes(x = logFC, y = -log10(PValue), color = significant)) + geom_point() + geom_vline(xintercept=c(-2, 2), col="black") +
+    geom_hline(yintercept=-log10(0.05), col="black") + theme_bw() + scale_color_manual(values = c("black", "#1874CD")) + labs(title = "Vulcano plot Sanos vs. LLA", x = "Log2FC", y = "-log10(P-valor)")+ theme(legend.position = "none") + geom_text_repel(data = top_gen_normalvsALL, aes(label = gene_name), size = 4, color = "black", max.overlaps = 10)
+normalvsALL_ggplot
+```
+
+```{r}
+ALLvsAML_ggplot <- ggplot(data = significant_ALLvsAML, aes(x = logFC, y = -log10(PValue), color = significant)) + geom_point() + geom_vline(xintercept=c(-2, 2), col="black") +
+    geom_hline(yintercept=-log10(0.05), col="black") + theme_bw() + scale_color_manual(values = c("black", "#1E90FF")) + labs(title = "Vulcano plot MLA vs. LLA", x = "Log2FC", y = "-log10(P-valor)")+ theme(legend.position = "none") + geom_text_repel(data = top_gen_AMLvsALL, aes(label = gene_name), size = 4, color = "black", max.overlaps = 10)
+ALLvsAML_ggplot
+```
+
+## Genes diferencialmente expresados compartidos
+```{r}
+# Adicionalmente, se ha generado un diagrama de Venn para observar qué genes se comparten dependiendo de las condiciones analizadas. 
+diagrama_info <- list(normalvsAML = significant_normalvsAML[significant_normalvsAML$significant == "TRUE", ]$gene_id, normalvsALL = significant_normalvsALL[significant_normalvsALL$significant == "TRUE", ]$gene_id, ALLvsAML = significant_ALLvsAML[significant_ALLvsAML$significant == "TRUE", ]$gene_id)
+library(ggVennDiagram)
+ggVennDiagram(diagrama_info, category.names = c("Sanos vs. LMA", "Sanos vs. LLA", "LMA vs. LLA"))
+```
+
+# Análisis de ontología 
+
+## AML vs. normal 
+
+```{r}
+# Se genera el análisis de enriquecimiento marcando el listado de genes diferencialmente expresados, el genoma humano y como etiqueta, ENSEMBL. Se especifica que se quiere obtener la ontología de los procesos biológicos y se indica un valor de corte de 0.01. 
+
+# En los genes, se han separado aquellos que están infra y sobrexpresados usando como filtro si el logFC era o no positivo. 
+
+# También se establece un valor de unniverso, que son en esencia los identificadores de todos los genes filtrados. 
+go.vall_normalvsAML_upregulated <- enrichGO(gene = subset(significant_normalvsAML, significant_normalvsAML$significant == "TRUE" & significant_normalvsAML$logFC > 0)$ENSEBLnew, OrgDb = org.Hs.eg.db, keyType = "ENSEMBL", ont = "BP", pvalueCutoff = 0.01, universe = symbols_new)
+go.vall_normalvsAML_downregulated <- enrichGO(gene = subset(significant_normalvsAML, significant_normalvsAML$significant == "TRUE" & significant_normalvsAML$logFC < 0)$ENSEBLnew, OrgDb = org.Hs.eg.db, keyType = "ENSEMBL", ont = "BP", pvalueCutoff = 0.01, universe = symbols_new)
+```
+
+```{r}
+# Se generan los gráficos de barras.
+barplot(go.vall_normalvsAML_upregulated, showCategory = 5)
+barplot(go.vall_normalvsAML_downregulated, showCategory = 5)
+```
+
+## ALL vs. normal 
+
+```{r}
+go.vall_normalvsALL_upregulated <- enrichGO(gene = subset(significant_normalvsALL, significant_normalvsALL$significant == "TRUE" & significant_normalvsAML$logFC > 0)$ENSEBLnew, OrgDb = org.Hs.eg.db, keyType = "ENSEMBL", ont = "BP", pvalueCutoff = 0.01, universe = symbols_new)
+go.vall_normalvsALL_downregulated <- enrichGO(gene = subset(significant_normalvsALL, significant_normalvsALL$significant == "TRUE" & significant_normalvsAML$logFC < 0)$ENSEBLnew, OrgDb = org.Hs.eg.db, keyType = "ENSEMBL", ont = "BP", pvalueCutoff = 0.01, universe = symbols_new)
+```
+
+```{r}
+barplot(go.vall_normalvsALL_upregulated, showCategory = 5)
+barplot(go.vall_normalvsALL_downregulated, showCategory = 5)
+```
+## ALL vs. AML
+
+```{r}
+go.vall_ALLvsAML_upregulated <- enrichGO(gene = subset(significant_ALLvsAML, significant_ALLvsAML$significant == "TRUE" & significant_normalvsAML$logFC >  0)$ENSEBLnew, OrgDb = org.Hs.eg.db, keyType = "ENSEMBL", ont = "BP", pvalueCutoff = 0.01, universe = symbols_new)
+go.vall_ALLvsAML_downregulated <- enrichGO(gene = subset(significant_ALLvsAML, significant_ALLvsAML$significant == "TRUE" & significant_normalvsAML$logFC < 0)$ENSEBLnew, OrgDb = org.Hs.eg.db, keyType = "ENSEMBL", ont = "BP", pvalueCutoff = 0.01, universe = symbols_new)
+```
+
+```{r}
+barplot(go.vall_ALLvsAML_upregulated, showCategory = 5)
+barplot(go.vall_ALLvsAML_downregulated, showCategory = 5)
+```
+# Preparación de las matrices de expresión con los genes seleccionados
+
+```{r}
+# Se extrae un data frame que contiene los genes que han sido seleccionados en cada situación. Para ello, se seleccionan aquellos datos que tengan asignado TRUE a la columna significant y se unen en un mismo data frame. 
+genes_dif_expresados_dataf <- rbind(subset(significant_normalvsALL, significant_normalvsALL$significant == "TRUE"), subset(significant_normalvsAML, significant_normalvsAML$significant == "TRUE"), subset(significant_ALLvsAML, significant_ALLvsAML$significant == "TRUE"))
+
+# Se genera un vector con los nombres únicos para estos genes. Esto quiere decir que de estos genes, únicamente se conserva copia si se repiten y se conservan todos aquellos que, por lo menos, aparezcan representados en una condición.
+genes_dif_expresados_vector <- genes_dif_expresados_dataf %>% distinct(gene_id, .keep_all = TRUE)
+
+# Ahora se extraen del df de train las columnas de los genes que se han seleccionado. Esto se hace seleccionando por nombre (gene_id) estas columnas y almacenándolas en un nuevo expressionset.
+expressionset_clean <- train[, as.vector(genes_dif_expresados_vector$gene_id)]
+
+```
+
+# Balanceo del conjunto de datos de entrenamiento
+
+```{r}
+# Dado que el conjunto de datos de entrenamiento presenta un claro desequilibrio en pos de la clase AML, es necesario aplicar una técnica de requilibrado en este aspecto. Por ello, se va a emplear la técnica de random oversampling, para la cual existe una función en el paquete caret. 
+
+# Se aplica, sobre los datos de entrenamiento, esta función. Se usa como variable x el expressionset anteriormente conseguido y como variable y la variable de clase factorizada del conjunto de datos original (train) ya que las muestras siguen en el mismo orden y todas ellas están presentes.
+train_bal <- upSample(x = expressionset_clean, y = as.factor(train$clase))
+
+# Se muestra la composición original.
+table(train$clase)
+# Se muestra la frecuencia de las clases tras el equilibrado. 
+table(train_bal$Class)
+# Ahora todas las clases tienen el mismo número de datos de AML y el orden de los datos ha cambiado: ahora es ALL, AML y normal, por orden alfabético. 
+```
+
+
+# Análisis de la separación de los grupos con las características seleccionadas
+
+## Escalado min-max
+```{r}
+# Antes de comenzar, se va a llevar a cabo un escalado min-max para estandarizar los datos. Para ello, se va a aplicar la siguiente fórmula 
+# El primer paso es crear una lista vacía que contendrá los valores del data frame. 
+train_esc <- list()
+
+# El segundo paso es eliminar la columna de clase (la función rescale da error cuando se aplica a una variable de tipo factor).
+train_bal_sinclase <- train_bal[, -ncol(train_bal)]
+
+# El tercer paso es crear un bucle que itere por el nombre de las columnas en train_bal_sinclase:
+ for (col in names(train_bal_sinclase)) {
+# En este caso, creará una columna llamada col (nombre por el que se está iterando) en el nuevo df que sea la columna original rescalada.
+  train_esc[[col]] <- rescale(train_bal_sinclase[[col]])
+ }
+train_esc <- as.data.frame(train_esc)
+```
+
+```{r}
+# Se asigna de nuevo la columna de la pertenencia a las clases de cada muestra. 
+train_esc$clase <- as.factor(train_bal$Class)
+```
+
+## PCA
+
+```{r}
+# Se crea un vector que asigne distintos colores a las muestras que se van a emplear para la separación de los grupos. 
+colores_PCA <- c(rep("#5B8FE3", 351), rep("#A3B18A", 351), rep("#E35B8F", 351))
+```
+
+```{r}
+# Se genera un PCA para ver si estas muestras se separan correctamente con las características escogidas. 
+par(mar= c(5,5,4,10))
+pca<-prcomp(train_esc[, -ncol(train_esc)])
+loads<-round(pca$sdev^2/sum(pca$sdev^2)*100,1)
+xlab<-c(paste("PC1",loads[1],"%"))
+ylab<-c(paste("PC2",loads[2],"%"))
+plot(pca$x[,1:2],xlab=xlab,ylab=ylab,pch=21,bg=colores_PCA,col=colores_PCA, main="PCA") 
+legend("topright",inset= c(-0.45,0),legend= c("Controles sanos","LMA", "LLA"),fill= c("#E35B8F","#A3B18A","#5B8FE3"),border="black",xpd=TRUE)
+```
+
+# Selección de características importantes
+
+```{r}
+set.seed(21081999)
+# En un primer lugar, se va a hacer la selección de las características más importantes utilizando el algoritmo implementado por el paquete Boruta. Para ello, se le pasa el conjunto de datos escalado y se le indica que genere árbolesun máximo de 100 veces, para reducir el coste computacional y el tiempo de llevar a cabo tal análisis. 
+selected_features <- Boruta(clase ~., data = train_esc, maxRuns = 100)
+# Se imprimen los resultados de la selección. 
+print(selected_features)
+
+# Como hemos se han obtenido un alto número de variables tentativas, se corrige empleandoo la función que sigue. 
+selected_features_final <- TentativeRoughFix(selected_features)
+print(selected_features_final)
+```
+```{r}
+# Se guardan las características importantes seleccionadas en una variable. 
+estadisticas_importancia <- attStats(selected_features_final)
+# Y se ordenan por su importancia media. 
+estadisticas_ordenadas <- estadisticas_importancia[order(-estadisticas_importancia$meanImp), ]
+# Se extrae el conjunto de datos con la importancia media y el nombre del gen. 
+export <- data.frame("Identificador" = rownames(estadisticas_ordenadas), "Importancia media" = estadisticas_ordenadas$meanImp, "Seleccionados" = estadisticas_ordenadas$decision)
+# Y se exportan los resultados finales. 
+write.xlsx(export, "seleccionados.xlsx")
+```
+
+## Reevaluación de la separación de los grupos
+
+```{r}
+# Ahora creamos un nuevo data frame que únicamente conserve las variables que se han seleccionado como importantes. Para ello, extraemos solamente los nombres de los genes a los que se les ha asignado el valor de "Confirmed". 
+genes_seleccionados <- names(selected_features_final$finalDecision[selected_features_final$finalDecision == "Confirmed"])
+# Seleccionamos las columnas del expressionset_esc que contengan esos nombres y las extraemos en un nuevo df.
+expressionset_final <- train_esc %>% select(genes_seleccionados)
+# Asignamos la columna de clase. 
+expressionset_final$clase <- train_esc$clase
+```
+
+```{r}
+# Comenzamos con un PCA para ver si estas muestras se separan correctamente con las características escogidas. 
+par(mar= c(5,5,4,10))
+pca<-prcomp(expressionset_final[, -ncol(expressionset_final)])
+loads<-round(pca$sdev^2/sum(pca$sdev^2)*100,1)
+xlab<-c(paste("PC1",loads[1],"%"))
+ylab<-c(paste("PC2",loads[2],"%"))
+plot(pca$x[,1:2],xlab=xlab,ylab=ylab,pch=21,bg=colores_PCA,col=colores_PCA, main="PCA") 
+legend("topright",inset= c(-0.45,0),legend= c("Controles sanos","LMA", "LLA"),fill= c("#E35B8F","#A3B18A","#5B8FE3"),border="black",xpd=TRUE)
+```
+
+## Análisis de ennriquecimiento de las características seleccionadas
+
+```{r}
+# Antes de comenzar el análisis de enriquecimiento, es necesario corregir los identificadores que se usan como nombres de los genes, como se hizo en el apartado de "Anotaciones" anteriormente. 
+# Se almacena en la variable symbols los genes. 
+symbols <- colnames(expressionset_final)
+# Se crea un nuevo vector que almacenará esta información nueva. 
+symbols_new_2 <- c()
+# Se crea un bulce for que irá aplicando la función a cada valor del vector original. 
+for (i in symbols) {
+  new <- strsplit(i, split = "\\.")[[1]][1]
+  symbols_new_2 <- c(symbols_new_2, new)
+}
+
+```
+
+```{r}
+# Se genera el análisis de enriquecimiento sobre todas las características seleccionadas como importantes. 
+go.selected_features <- enrichGO(gene = symbols_new_2, OrgDb = org.Hs.eg.db, keyType = "ENSEMBL", ont = "BP", pvalueCutoff = 0.01)
+```
+
+```{r}
+# Se genera el gráfico de barras. 
+barplot(go.selected_features)
+```
+
+# Extracción de la matriz de conteos con las características seleccionadas
+
+```{r}
+# Finalmente, se extrae un data frame final generado a partir del data frame sin escalar y que contenga las características seleccionadas como importantes.
+genes_seleccionados <- names(selected_features_final$finalDecision[selected_features_final$finalDecision == "Confirmed"])
+expressionset_final <- train_bal %>% select(genes_seleccionados)
+expressionset_final$clase <- train_bal$Class
+
+# Se sigue el mismo procedimiento con el conjunto de datos de test que se generó al principio de este código. 
+test_seleccionados <- test %>% select(genes_seleccionados)
+test_seleccionados$clase <- test$clase
+
+# Y se exporta todo para poder usarlo en otro archivo de RMarkdown. 
+write.csv(expressionset_final, file = "train.csv", row.names = TRUE, col.names = TRUE)
+write.csv(test_seleccionados, file = "test.csv", row.names = TRUE, col.names = TRUE)
+
+```
+

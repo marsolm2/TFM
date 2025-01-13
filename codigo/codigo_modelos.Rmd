@@ -1,0 +1,303 @@
+---
+title: "modelos_aprendizaje_automatico"
+author: "María Martínez Solsona"
+date: "2024-12-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Carga de librerías
+
+```{r}
+# Librerías para generar modelos de aprendizaje automático 
+library(caret)
+library(e1071)
+library(MLmetrics)
+library(ipred)
+library(scales)
+```
+
+# Carga de datos
+
+```{r}
+# Se han exportado los datos del anterior RMarkdown a un archivo CSV que se va a cargar aquí. 
+train <- read.csv("train.csv")
+test <- read.csv("test.csv")
+# Al explorar este archivo, las filas no estaban nombradas y que sus nombres se habían pasado a la variable X. Se han introducido introducido los nombres de éstas y se ha eliminado esa columna adicional. 
+rownames(train) <- train$X
+train$X <- NULL
+
+# Adicionalmente, se han separado los conjuntos de características y las etiquetas para los dos sets de datos.
+train_x <- train[,-1000]
+train_y <- as.factor(train$clase)
+
+rownames(test) <- test$X
+test$X <- NULL
+test_x <- test[,-1000]
+test_y <- as.factor(test$clase)
+```
+
+# Primer algoritmo: bagging CART 
+
+```{r}
+# Se obtiene la información del algoritmo que se va a utilizar. Se observa que no tiene parámetros a configurar por lo que no se añade el argumento tuneLength. 
+getModelInfo("treebag")
+```
+
+
+```{r}
+# Se establece una semilla para que los resultados sean reproducibles. 
+set.seed(21081999)
+# El primer paso es establecer el control del entrenamiento. Como se quiere obtener una mejor estimación del rendimiento del modelo, se aplica el método de k-fold-cross validation. En esta función, se añade el parámetro number (en nuestro caso, 10) que serán los lotes en los que se partirán los datos (4 para etrenar el modelo y 1 para la validación). Este proceso se repetirá 10 veces (repeats) y se calculará la media de la eficacia del modelo. 
+training_control <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
+
+# En este caso, se va a entrenar un modelo bagging CART. En este modelo, se introducen los datos de entrenamiento, el control de entrenamiento diseñado anteriormente y el método a emplear, "treebag". En este tipo de algoritmo no es necesario especificar ningún parámetro adicional. 
+
+# También se implementa una función para calcular el tiempo que tarda el modelo en ejecutarse. 
+
+inicio <- proc.time()
+cart <- train(clase ~., data = train, trControl = training_control, method = "treebag")
+final <- proc.time()
+print(cart)
+tiempo <- final - inicio
+print(tiempo)
+```
+
+
+```{r}
+# Se vuelve a establecer una semilla para que los resultados sean reproducibles. Se usa predict para predecir los resutlados del conjunto de datos de prueba. Como se quiere obtener solamente las etiquetas, es necesario especificar que el tipo de predicción sea "raw". 
+
+# También se calcula el tiempo de ejecución. 
+
+set.seed(21081999)
+inicio <- proc.time()
+cart_pred <- predict(cart, newdata = test_x, type = "raw")
+final <- proc.time()
+tiempo <- final - inicio
+print(tiempo)
+```
+
+
+```{r}
+set.seed(21081999)
+# Se generan las métricas para evaluar el rendimiento del modelo. 
+# Matriz de confusión (accuracy, kappa y valores de las clases independientes)
+cm_cart <- confusionMatrix(cart_pred, test_y)
+cm_cart
+
+# F1 score. 
+F1_Score(cart_pred, test_y)
+```
+## Segundo algoritmo: Random Forest
+
+```{r}
+# Información del modelo. 
+getModelInfo("rf")
+```
+```{r}
+# Semilla.
+set.seed(21081999)
+# En este caso, para la generación del modelo sí que existen parámetros para tunear. Es mtry que es el número de variables muestreadas aleatoriamente como candidatas en cada decisión. Por defecto, este algoritmo probará distintos valores para mtry y se quedará con aquel que ejecute una mejor actuación (que obtenga una mejor precisión). Por otro lado, se puede controlar también el valor de ntrees que será el número de árboles que construirá el algoritmo. Por defecto, este valor es de 200 con lo que no se modificará. 
+
+inicio - proc.time()
+rf <- train(clase ~., data = train, trControl = training_control, method = "rf")
+final <- proc.time()
+tiempo <- final - inicio
+print(tiempo)
+```
+
+```{r}
+# Información del modelo.
+print(rf)
+```
+
+```{r}
+# Predicción de las clases.
+set.seed(21081999)
+inicio <- proc.time()
+rf_pred <- predict(rf, newdata = test_x, type = "raw")
+final <- proc.time()
+tiempo <- final - inicio
+print(tiempo)
+```
+
+```{r}
+# Métricas de evaluación.
+set.seed(21081999)
+# Matriz de confusión 
+cm_rf <- confusionMatrix(rf_pred, test_y)
+cm_rf
+
+# F1 score. 
+F1_Score(rf_pred , test_y)
+```
+## Tercer algoritmo: SVM Lineal
+
+```{r}
+# En este caso, es recomendable trabajar con las variables escaladas así que se va a escalar el conjunto de datos. 
+# Para ello, se emplea la función preProcess sobre los datos de entrenamiento, estableciendo como método "range". Esto va a generar unos valores de preprocesado que servirán para calcular en pasos posteriores los valores de entrenamiento y prueba. Lo importante es que estos valores se han generado usando como referencia los datos de entrenamiento, por lo que se evitará la fuga de datos.  
+preProcValues <- preProcess(train, method = c("range"))
+
+# Se predicen los datos de train y test usando los valores de preprocesado generados sobre el conjunto de datos de entrenamiento. 
+train_esc <- predict(preProcValues, train)
+test_esc <- predict(preProcValues, test_x)
+```
+
+```{r}
+# Información del modelo. 
+getModelInfo("svmLinear")
+```
+```{r}
+# Se establece la semilla y se genera el SVM. Dado que se está usando un kernel Linear, no es necesario specificar ningún parámetro adicional. El valor de coste se establecerá en 1 por defecto. 
+set.seed(21081999)
+inicio <- proc.time()
+svmLinear <- train(clase ~., data = train_esc, trControl = training_control, method = "svmLinear")
+final <- proc.time()
+tiempo <- final - inicio
+print(tiempo)
+```
+
+```{r}
+# Información del modelo.
+print(svmLinear)
+```
+
+```{r}
+# Predicciones.
+set.seed(21081999)
+inicio <- proc.time()
+svmLinear_pred <- predict(svmLinear, newdata = test_esc, type = "raw")
+final <- proc.time()
+tiempo <- final - inicio
+print(tiempo)
+```
+
+```{r}
+set.seed(21081999)
+# Métricas de evaluación.
+# Matriz de confusión (accuracy y valor Kappa)
+cm_svmLinear <- confusionMatrix(svmLinear_pred, test_y)
+cm_svmLinear
+# Error de clasificación
+mean(svmLinear_pred  != test_y)
+# F1 score. 
+F1_Score(svmLinear_pred , test_y)
+
+```
+## Cuarto algoritmo: SVM Radial
+
+```{r}
+# Información del modelo.
+getModelInfo("svmRadial")
+```
+
+```{r}
+set.seed(21081999)
+# En este caso, sí que existen dos parámetros tuneables: una es la función de coste o cost y otro el valor sigma. Para tunearlos, se añade el argumento tuneLength que probará distintos valores de un parámetro (C, en este caso) y mantendrá constante el otro (sigma) para determinar cuál es el mejor. 
+inicio <- proc.time()
+svmRadial <- train(clase ~., data = train_esc, trControl = training_control, method = "svmRadial", tuneLength = 10)
+final <- proc.time()
+tiempo <- final - inicio
+print(tiempo)
+```
+
+```{r}
+# Información del modelo.
+print(svmRadial)
+```
+
+```{r}
+# Predicciones. 
+set.seed(21081999)
+inicio <- proc.time()
+svmRadial_pred <- predict(svmRadial, newdata = test_esc, type = "raw")
+final <- proc.time()
+tiempo <- final - inicio
+print(tiempo)
+```
+
+```{r}
+set.seed(21081999)
+# Matriz de confusión (accuracy y valor Kappa)
+cm_svmRadial <- confusionMatrix(svmRadial_pred, test_y)
+cm_svmRadial
+# Error de clasificación
+mean(svmRadial_pred  != test_y)
+# F1 score. 
+F1_Score(svmRadial_pred , test_y)
+```
+
+# Exportación de los datos
+
+```{r}
+# Dado que el bagSVM no se puede implementar cómodamente en R, se van a exportar los datos escalados para ser utilizados en el desarrollo de este algoritmo en Google Colab, empleando Python. Para obtener las métricas de evaluación se volverá a R. 
+# Datos de entrenamiento 
+write.csv(train_esc, file = "train.csv", row.names = TRUE, col.names = TRUE)
+# Datos de prueba
+write.csv(test_esc, file = "test.csv", row.names = TRUE, col.names = TRUE)
+```
+
+
+## SVM lineal con bagging
+
+```{r}
+# Se sube el archivo con las predicciones que se ha generado en python.
+bagsvm_pred <- read.csv("ypred.csv")
+
+# Se pasa a forma de lista y se factoriza.
+bagsvm_pred <- as.factor(bagsvm_pred$X0)
+
+# Evaluación del modelo.
+# Matriz de confusión (accuracy y valor Kappa)
+cm_bagsvm <- confusionMatrix(bagsvm_pred, test_y)
+cm_bagsvm
+# Error de clasificación
+mean(bagsvm_pred  != test_y)
+# F1 score. 
+F1_Score(bagsvm_pred, test_y)
+```
+## K-NN
+
+```{r}
+# Información del algoritmo.
+getModelInfo("knn")
+```
+```{r}
+# Se ha desarrollado un K-NN añadiendo un tuneLength de 10, lo que permitirá la prueba de distintos valores de k y seleccionará el mejor valor de todos ellos. 
+set.seed(21081999)
+inicio <- proc.time()
+knn <- train(clase ~., data = train_esc, trControl = training_control, method = "knn", tuneLength = 10)
+final <- proc.time()
+tiempo <- final - inicio
+print(tiempo)
+```
+
+```{r}
+# Información del modelo.
+print(knn)
+```
+
+```{r}
+# Predicciones. 
+set.seed(21081999)
+inicio <- proc.time()
+knn_pred <- predict(knn, newdata = test_esc, type = "raw")
+final <- proc.time()
+tiempo <- final - inicio
+print(tiempo)
+```
+
+```{r}
+# Evaluación del modelo.
+# Matriz de confusión (accuracy y valor Kappa)
+cm_knn <- confusionMatrix(knn_pred , test_y)
+cm_knn
+# Error de clasificación
+mean(knn_pred  != test_y)
+# F1 score. 
+F1_Score(knn_pred, test_y)
+```
+
